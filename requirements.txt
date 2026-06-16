@@ -1,2 +1,4 @@
 copernicusmarine>=2.3,<3
 numpy>=1.26
+netcdf4>=1.6
+h5netcdf>=1.3
