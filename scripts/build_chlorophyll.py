@@ -42,7 +42,7 @@ LAT_MIN, LAT_MAX = 24.6, 27.9
 LON_MIN, LON_MAX = -84.5, -81.7
 
 # Validation thresholds (the "fail-don't-overwrite" guardrails).
-MAX_AGE_DAYS = 7          # data_date must be within this many days of today (UTC)
+MAX_AGE_DAYS = 5          # data_date must be within this many days of today (UTC) — staleness alarm
 MIN_VALID_FRACTION = 0.5  # at least this fraction of cells must be finite
 
 OUT_PATH = Path(__file__).resolve().parent.parent / "chlorophyll" / "latest.json"
@@ -96,7 +96,7 @@ def main() -> None:
         if age < 0:
             fail(f"latest data_date {data_date} is in the future vs {today} (clock/source error)")
         if age > MAX_AGE_DAYS:
-            fail(f"latest data_date {data_date} is {age} d old (> {MAX_AGE_DAYS}); treating as stale")
+            fail(f"Copernicus chlorophyll stale: latest {data_date} ({age} d old > {MAX_AGE_DAYS})")
 
         try:
             chl = ds_last[VARIABLE].load()

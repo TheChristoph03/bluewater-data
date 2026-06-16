@@ -47,23 +47,35 @@ longitude **ascending** from `lon0`. `null` marks a cell with no data.
 1. **`data_date` comes from the `time` coordinate, never the global
    `time_coverage_end` attribute** — on this product that global attr is stale
    2023 boilerplate and would falsely mark today's data 3 years old.
-2. **Fail, don't overwrite.** If the fetch fails, the grid is empty/all-null, or
-   the latest `data_date` is older than 7 days, the script exits non-zero and
-   writes nothing. The previous good `latest.json` stays in place, so the app
-   never ingests garbage into fish scoring; the app's own freshness rule (5.0b)
-   downgrades stale data to a climatology fallback.
+2. **Fail, don't overwrite.** If the fetch/auth fails, the grid is empty/all-null,
+   or the latest `data_date` is older than **5 days** (the staleness alarm), the
+   script exits non-zero and writes nothing. The previous good `latest.json` stays
+   in place, so the app never ingests garbage into fish scoring; the app's own
+   freshness rule (5.0b) downgrades stale data to a fallback. Every failure prints
+   `repr(e)` (never an empty string) so the alert is actionable.
 
-## Enabling the daily job (after review)
+## Automation
 
-The schedule ships **disabled** so nothing runs until secrets exist.
+- **Schedule:** runs **daily at `09:00 UTC`** (`cron: '0 9 * * *'` in
+  `.github/workflows/chlorophyll.yml`) — timed for the gap-free NRT product's
+  ~1–2 day latency. `workflow_dispatch` also allows a manual run any time.
+- **Fetch:** `copernicusmarine.subset` (direct NetCDF download). The job has a
+  hard `timeout-minutes: 10` so a hung fetch fails fast.
+- **Secrets** (already set; Settings → Secrets and variables → Actions):
+  `COPERNICUSMARINE_SERVICE_USERNAME`, `COPERNICUSMARINE_SERVICE_PASSWORD`.
 
-1. Add repo secrets (Settings → Secrets and variables → Actions):
-   - `COPERNICUSMARINE_SERVICE_USERNAME`
-   - `COPERNICUSMARINE_SERVICE_PASSWORD`
-2. Run once manually: Actions → **Build chlorophyll proxy** → *Run workflow*
-   (`workflow_dispatch`) — confirm it commits an updated `latest.json`.
-3. Turn on the daily cron: uncomment the `schedule:` block in
-   `.github/workflows/chlorophyll.yml`.
+### Alarms (how you find out it broke)
+1. **Email** — GitHub emails the repo owner whenever a *scheduled* run fails.
+   The staleness guard (>5 d old) makes "Copernicus went stale" a hard failure,
+   so it triggers that email instead of silently shipping aging data.
+2. **Issue** — on failure the workflow opens an issue titled
+   *"chlorophyll proxy build failing"*, deduped by title (one issue per outage,
+   not one per day). Close it once fixed.
 
-The `latest.json` currently committed was generated from a real run on
-2026-06-16 (data_date 2026-06-15) so Pages has something to serve immediately.
+### Manual re-run
+- UI: Actions → **Build chlorophyll proxy** → *Run workflow*.
+- CLI: `gh workflow run chlorophyll.yml --repo TheChristoph03/bluewater-data`.
+- Local (debug): `python scripts/build_chlorophyll.py` with a cached
+  `~/.copernicusmarine` login or the two env vars set.
+
+Costs $0 — the repo is public, so Actions minutes are free.

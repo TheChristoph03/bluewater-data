@@ -1,15 +1,15 @@
 name: Build chlorophyll proxy
 
-# The daily schedule is intentionally DISABLED until the Copernicus secrets are
-# set. To enable it: add the two repo secrets (see README), then uncomment the
-# `schedule:` block below. `workflow_dispatch` lets you test a single run first.
+# Daily scheduled run is ENABLED (secrets are set). `workflow_dispatch` also
+# allows a manual run any time.
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "20 6 * * *"   # daily 06:20 UTC — Copernicus posts ~yesterday's day
+  schedule:
+    - cron: "0 9 * * *"      # daily 09:00 UTC — accounts for the gap-free NRT ~1–2 day latency
 
 permissions:
   contents: write            # the job commits the regenerated JSON back to the repo
+  issues: write              # the alarm step opens a dedup'd issue on failure
 
 concurrency:
   group: chlorophyll
@@ -48,3 +48,22 @@ jobs:
           git add chlorophyll/latest.json
           git commit -m "chlorophyll: update latest.json ($(date -u +%Y-%m-%d))"
           git push
+
+      # Secondary alarm (GitHub already emails the owner on a failed scheduled
+      # run). Opens an issue once and dedups by exact title so a multi-day outage
+      # doesn't spam — close the issue when fixed and it can re-open.
+      - name: Alarm on failure (dedup by title)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="chlorophyll proxy build failing"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title --jq ".[] | select(.title==\"$TITLE\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Issue #$EXISTING already open — not duplicating."
+          else
+            gh issue create --title "$TITLE" --body \
+              "Scheduled chlorophyll proxy build failed at $(date -u +%Y-%m-%dT%H:%MZ). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. The last-good latest.json was NOT overwritten (fail-don't-overwrite). Close this issue once fixed." \
+              || echo "issue create failed (non-fatal)"
+          fi
