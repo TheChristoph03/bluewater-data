@@ -1,0 +1,49 @@
+name: Build chlorophyll proxy
+
+# The daily schedule is intentionally DISABLED until the Copernicus secrets are
+# set. To enable it: add the two repo secrets (see README), then uncomment the
+# `schedule:` block below. `workflow_dispatch` lets you test a single run first.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "20 6 * * *"   # daily 06:20 UTC — Copernicus posts ~yesterday's day
+
+permissions:
+  contents: write            # the job commits the regenerated JSON back to the repo
+
+concurrency:
+  group: chlorophyll
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build latest.json
+        env:
+          COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
+          COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
+        # On any validation failure the script exits non-zero, this step fails,
+        # and the commit step below never runs — last-good latest.json is kept.
+        run: python scripts/build_chlorophyll.py
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- chlorophyll/latest.json; then
+            echo "No change in latest.json — nothing to commit."
+            exit 0
+          fi
+          git config user.name "bluewater-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add chlorophyll/latest.json
+          git commit -m "chlorophyll: update latest.json ($(date -u +%Y-%m-%d))"
+          git push
