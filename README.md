@@ -42,6 +42,48 @@ subsets the SWFL box, and commits a tiny JSON that the app reads with no creds.
 `values` is row-major: outer index = latitude **ascending** from `lat0`, inner =
 longitude **ascending** from `lon0`. `null` marks a cell with no data.
 
+## Subsurface-temperature feed (slice 5.2a)
+
+- **Source:** `cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m` (Copernicus Global
+  Physics analysis+**forecast**, ~8 km / 0.083°, daily), variable `thetao`
+  (sea-water potential temperature, published in **°F**).
+- **Area:** the same SWFL bbox.
+- **Depths:** a small thermocline set — model levels nearest **30 / 60 / 90 m**
+  (e.g. 29.4 / 55.8 / 92.3 m) where in-range pelagics hold (wahoo ~30 m,
+  blackfin ~60 m). 100 m+ is dropped — mostly below the in-range seabed.
+- **Horizon:** a forecast product, so it publishes **today + ~6 forecast days**
+  (≈ the tide planning window); the app samples the **departure day**.
+- **Published file:** [`subsurface-temp/latest.json`](subsurface-temp/latest.json)
+  — `https://thechristoph03.github.io/bluewater-data/subsurface-temp/latest.json`
+- **Size:** ~7 days × 3 depths over the bbox ≈ **~23 KB gzipped/day**.
+
+### JSON contract (consumed by the app's `SubsurfaceTempProvider`, slice 5.2b)
+
+```jsonc
+{
+  "dataset": "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m",
+  "variable": "thetao", "units": "degF",
+  "data_date": "2026-06-17",            // nowcast day (from the time COORDINATE)
+  "depthsM": [29.4, 55.8, 92.3],
+  "bbox": { … }, "grid": { … },         // same shape as the chlorophyll grid
+  "null_means": "no water at this depth (seafloor) — a real negative, not missing data",
+  "days": [
+    { "date": "2026-06-17",
+      "depths": [ { "depthM": 29.4, "validFraction": 0.63, "values": [[ … ]] }, … ] },
+    …
+  ]
+}
+```
+
+**TWO DISTINCT NULLS (the app must tell them apart):**
+1. `null` inside a **published** layer = **no water that deep here** (seafloor/land).
+   The ocean model fills every wet cell, so a null can only be below the seabed — a
+   **real negative** for a species holding at that depth ("too shallow"), NOT missing
+   data. (Verified: depth-nulls are monotonic — dry shallow ⇒ dry deep.)
+2. A whole **depth/day absent** from `days[]`, or a **stale `data_date`** = data
+   **unavailable** → the app falls back to surface SST + flags. Distinguished by
+   presence/absence, with per-layer `validFraction` for the coverage guard.
+
 ## Hard rules baked into `scripts/build_chlorophyll.py`
 
 1. **`data_date` comes from the `time` coordinate, never the global

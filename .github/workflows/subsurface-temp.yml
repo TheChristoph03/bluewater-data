@@ -1,0 +1,67 @@
+name: Build subsurface-temp proxy
+
+# Daily schedule ships DISABLED pending review (slice 5.2a). To enable: uncomment the
+# `schedule:` block (secrets already exist — reused from the chlorophyll proxy).
+# `workflow_dispatch` allows a manual run any time.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "30 9 * * *"   # daily 09:30 UTC — offset from the chlorophyll job (09:00)
+
+permissions:
+  contents: write            # the job commits the regenerated JSON back to the repo
+  issues: write              # the alarm step opens a dedup'd issue on failure
+
+concurrency:
+  group: subsurface-temp
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10        # fail fast — a hung fetch should not run for 20 min
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build latest.json
+        env:
+          COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
+          COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
+        # On any failure (fetch/auth, missing target day, suspect coverage) the script exits
+        # non-zero and writes nothing — the last-good latest.json is kept.
+        run: python scripts/build_subsurface_temp.py
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- subsurface-temp/latest.json; then
+            echo "No change in subsurface-temp/latest.json — nothing to commit."
+            exit 0
+          fi
+          git config user.name "bluewater-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add subsurface-temp/latest.json
+          git commit -m "subsurface-temp: update latest.json ($(date -u +%Y-%m-%d))"
+          git push
+
+      - name: Alarm on failure (dedup by title)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="subsurface-temp proxy build failing"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title --jq ".[] | select(.title==\"$TITLE\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Issue #$EXISTING already open — not duplicating."
+          else
+            gh issue create --title "$TITLE" --body \
+              "Scheduled subsurface-temp proxy build failed at $(date -u +%Y-%m-%dT%H:%MZ). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. The last-good latest.json was NOT overwritten (fail-don't-overwrite). Close this issue once fixed." \
+              || echo "issue create failed (non-fatal)"
+          fi
