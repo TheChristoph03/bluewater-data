@@ -1,12 +1,11 @@
 name: Build subsurface-temp proxy
 
-# Daily schedule ships DISABLED pending review (slice 5.2a). To enable: uncomment the
-# `schedule:` block (secrets already exist — reused from the chlorophyll proxy).
-# `workflow_dispatch` allows a manual run any time.
+# Daily scheduled run is ENABLED (verified green in CI 2026-06-17). `workflow_dispatch` also
+# allows a manual run any time. Secrets are reused from the chlorophyll proxy.
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "30 9 * * *"   # daily 09:30 UTC — offset from the chlorophyll job (09:00)
+  schedule:
+    - cron: "30 9 * * *"     # daily 09:30 UTC — offset from the chlorophyll job (09:00)
 
 permissions:
   contents: write            # the job commits the regenerated JSON back to the repo
