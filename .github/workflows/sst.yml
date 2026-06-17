@@ -1,0 +1,66 @@
+name: Build SST proxy
+
+# Dense OSTIA SST (0.05°) for break detection / overlay — distinct from the coarse routing SST.
+# Schedule is DISABLED until a manual workflow_dispatch run verifies green; then the cron below is
+# uncommented (staggered after chlorophyll 09:00 / subsurface 09:30 / currents 10:00). Secrets
+# reused from the other proxies.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "30 10 * * *"     # daily 10:30 UTC — staggered from chlorophyll/subsurface/currents
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sst
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build latest.json
+        env:
+          COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
+          COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
+        run: python scripts/build_sst.py
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- sst/latest.json; then
+            echo "No change in sst/latest.json — nothing to commit."
+            exit 0
+          fi
+          git config user.name "bluewater-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add sst/latest.json
+          git commit -m "sst: update latest.json ($(date -u +%Y-%m-%d))"
+          git push
+
+      - name: Alarm on failure (dedup by title)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="sst proxy build failing"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title --jq ".[] | select(.title==\"$TITLE\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Issue #$EXISTING already open — not duplicating."
+          else
+            gh issue create --title "$TITLE" --body \
+              "Scheduled SST proxy build failed at $(date -u +%Y-%m-%dT%H:%MZ). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. The last-good latest.json was NOT overwritten. Close once fixed." \
+              || echo "issue create failed (non-fatal)"
+          fi

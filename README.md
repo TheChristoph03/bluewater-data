@@ -119,6 +119,40 @@ The app samples the nearest step to each trip time and overrides the Open-Meteo
 current at the routing-physics sampler seam (drift + leg effective-speed + narrative),
 falling back to Open-Meteo when this feed is unavailable.
 
+## Dense-SST feed (slice 5.3)
+
+- **Source:** `METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2` (Copernicus **OSTIA L4 NRT**,
+  product `SST_GLO_SST_L4_NRT_OBSERVATIONS_010_001`), variable **`analysed_sst`**
+  (Kelvin → published in **°F**), **0.05° gap-free** analysis.
+- **What it's for / NOT for:** this is the **dense break-detection + overlay** SST —
+  it feeds SST front/edge detection (5.4) and the break-line overlay (5.7). It is
+  **DISTINCT from the coarse Open-Meteo routing SST** (slice 5.1): higher resolution,
+  an *analysis* (not a forecast), and **not** a routing-scoring source.
+- **Area:** the same SWFL bbox — **66 × 56** cells at 0.05° (~89 % ocean).
+- **Currency:** OSTIA L4 NRT is an **observation/analysis** product — one gap-free map
+  per day, **~1-day latency, no forward forecast**. We publish the **latest analysis
+  day** (normally yesterday); SST is slow, so the freshest map is what break detection
+  needs. (The CMEMS product *page* extent is stale — the real `time` coordinate is current.)
+- **Published file:** [`sst/latest.json`](sst/latest.json) —
+  `https://thechristoph03.github.io/bluewater-data/sst/latest.json`
+- **Size:** one day over the bbox ≈ **~22 KB** (a few KB gzipped).
+
+```jsonc
+{
+  "dataset": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "variable": "analysed_sst", "units": "degF",
+  "data_date": "2026-06-16",            // latest analysis day (from the time COORDINATE)
+  "generated_at": "2026-06-17T12:31:25Z",
+  "validFraction": 0.8918,              // share of non-null (wet) cells; the rest are land/coast
+  "bbox": { … }, "grid": { … },         // same shape as the chlorophyll grid (lat/lon ascending)
+  "null_means": "land / coast (no SST) — OSTIA fills every wet cell; not missing data",
+  "values": [ [ /* nLon cols, lon ascending */ ], /* … nLat rows, lat ascending … */ ]
+}
+```
+`null` inside the grid = **land/coast** (OSTIA fills every wet cell); a **missing file**
+or a **stale `data_date`** = data **unavailable**. Staleness guard: the latest map must
+be ≤ **2 days** old (latency makes yesterday normal). Cron staggered to **10:30 UTC**.
+
 ## Hard rules baked into `scripts/build_chlorophyll.py`
 
 1. **`data_date` comes from the `time` coordinate, never the global
