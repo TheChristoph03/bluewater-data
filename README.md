@@ -84,6 +84,41 @@ longitude **ascending** from `lon0`. `null` marks a cell with no data.
    **unavailable** → the app falls back to surface SST + flags. Distinguished by
    presence/absence, with per-layer `validFraction` for the coverage guard.
 
+## Surface-current feed (slice 5.2c)
+
+- **Source:** `cmems_mod_glo_phy_anfc_merged-uv_PT1H-i` (Copernicus Global Physics,
+  hourly), variables **`utotal`/`vtotal`** = the **total** surface current
+  (geostrophic + tide + Stokes + Ekman — what a surface vessel / a drifting boat
+  actually feels), published as **`speedKnots` + `bearingToward`** (° set,
+  oceanographic "flowing toward", matching the app's `currentDirectionDegrees`).
+- **Area:** the same SWFL bbox. **Cadence:** every **3 h** over a **48 h** window
+  (matches the Open-Meteo routing window). 3-hourly (Nyquist 6 h) resolves the
+  diurnal + semidiurnal tidal set (M2 12.42 h, S2 12 h, K1/O1 ~24 h); shallow-water
+  overtides (M4 6.2 h, M6 4.1 h) are under-resolved but minor offshore.
+- **Reality check:** in-range SWFL current is **weak (~0.2–0.9 kn, max ~0.9, 0% > 1 kn)** —
+  this is **more complete shelf/tidal currents, NOT the Gulf Stream** (Loop Current is
+  offshore/west; Gulf Stream is east-coast, a later region).
+- **Published file:** [`currents/latest.json`](currents/latest.json) —
+  `https://thechristoph03.github.io/bluewater-data/currents/latest.json`
+- **Size:** 17 steps × (speed+bearing) ≈ **~52 KB gzipped/day**.
+
+```jsonc
+{
+  "dataset": "cmems_mod_glo_phy_anfc_merged-uv_PT1H-i",
+  "units": "speedKnots (kn); bearingToward (° set, oceanographic 'flowing toward')",
+  "data_date": "2026-06-17", "cadence_hours": 3,
+  "bbox": { … }, "grid": { … },
+  "steps": [
+    { "time": "2026-06-17T08:00:00Z", "validFraction": 0.90,
+      "speedKnots": [[ … ]], "bearingToward": [[ … ]] },   // null = land / no data
+    …
+  ]
+}
+```
+The app samples the nearest step to each trip time and overrides the Open-Meteo
+current at the routing-physics sampler seam (drift + leg effective-speed + narrative),
+falling back to Open-Meteo when this feed is unavailable.
+
 ## Hard rules baked into `scripts/build_chlorophyll.py`
 
 1. **`data_date` comes from the `time` coordinate, never the global
