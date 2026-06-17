@@ -1,13 +1,13 @@
 name: Build SST proxy
 
 # Dense OSTIA SST (0.05°) for break detection / overlay — distinct from the coarse routing SST.
-# Schedule is DISABLED until a manual workflow_dispatch run verifies green; then the cron below is
-# uncommented (staggered after chlorophyll 09:00 / subsurface 09:30 / currents 10:00). Secrets
-# reused from the other proxies.
+# Daily scheduled run is ENABLED (verified green via workflow_dispatch in CI 2026-06-17, run
+# 27690393824). Staggered after chlorophyll (09:00) / subsurface (09:30) / currents (10:00).
+# Secrets reused from the other proxies.
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "30 10 * * *"     # daily 10:30 UTC — staggered from chlorophyll/subsurface/currents
+  schedule:
+    - cron: "30 10 * * *"     # daily 10:30 UTC — staggered from chlorophyll/subsurface/currents
 
 permissions:
   contents: write
