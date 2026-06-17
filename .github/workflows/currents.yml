@@ -1,11 +1,11 @@
 name: Build currents proxy
 
-# Daily schedule ships DISABLED pending review + CI verification (slice 5.2c). To enable:
-# uncomment the `schedule:` block (secrets already exist — reused from the other proxies).
+# Daily scheduled run is ENABLED (verified green in CI 2026-06-17). Staggered after chlorophyll
+# (09:00) + subsurface (09:30). Secrets reused from the other proxies.
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "0 10 * * *"   # daily 10:00 UTC — offset from chlorophyll (09:00) + subsurface (09:30)
+  schedule:
+    - cron: "0 10 * * *"     # daily 10:00 UTC — staggered from chlorophyll (09:00) + subsurface (09:30)
 
 permissions:
   contents: write
