@@ -1,0 +1,87 @@
+name: Build P1 never-blank bundle (one-off)
+
+# P1 bundle (strategy doc §F): OSM basemap z0–z12 + GEBCO offshore contours →
+# single p1-bundle.pmtiles, target ≤ 60 MB. ONE-OFF (GEBCO is annual): no cron,
+# workflow_dispatch only. Re-run when GEBCO releases (yearly, ~July) or for a
+# basemap refresh. First run IS spike S3 for the bundle — it measures the real size.
+# STATUS: UNVERIFIED end-to-end (see scripts/charts/README.md honesty ledger).
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Region file stem in regions/"
+        default: "swfl"
+        required: true
+      gebco_url:
+        description: "GEBCO global netCDF zip URL (bump when the annual grid changes)"
+        default: "https://www.bodc.ac.uk/data/open_download/gebco/gebco_2025/zip/"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: charts-p1
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120        # dominated by the ~4 GB GEBCO download
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free runner disk (GEBCO needs ~12 GB scratch)
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/share/dotnet
+          df -h / | tail -1
+
+      - name: Install GDAL, tippecanoe, go-pmtiles
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin build-essential libsqlite3-dev zlib1g-dev unzip
+          git clone --depth 1 https://github.com/felt/tippecanoe.git /tmp/tippecanoe
+          make -C /tmp/tippecanoe -j"$(nproc)"
+          sudo make -C /tmp/tippecanoe install
+          curl -fsSL https://github.com/protomaps/go-pmtiles/releases/download/v1.30.3/go-pmtiles_1.30.3_Linux_x86_64.tar.gz | tar xz pmtiles
+          sudo mv pmtiles /usr/local/bin/
+          gdalinfo --version && tippecanoe --version && pmtiles --help 2>&1 | head -2
+
+      - name: Build P1 bundle
+        env:
+          GEBCO_URL: ${{ github.event.inputs.gebco_url }}
+        run: |
+          REGION="${{ github.event.inputs.region }}"
+          bash scripts/charts/build_p1_bundle.sh "regions/$REGION.json" "dist/$REGION/p1-bundle.pmtiles" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify bundle
+        run: |
+          REGION="${{ github.event.inputs.region }}"
+          pmtiles verify "dist/$REGION/p1-bundle.pmtiles"
+          pmtiles show "dist/$REGION/p1-bundle.pmtiles" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload to R2 (skips until secrets are configured)
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          REGION="${{ github.event.inputs.region }}"
+          if [ -z "$R2_BUCKET" ]; then
+            echo "R2 secrets not configured — dry run, bundle kept as artifact only."
+            exit 0
+          fi
+          sudo apt-get install -y rclone
+          rclone copyto "dist/$REGION/p1-bundle.pmtiles" "r2:$R2_BUCKET/$REGION/p1-bundle.pmtiles" --progress
+
+      - name: Keep bundle as artifact (14 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: p1-bundle-${{ github.event.inputs.region }}
+          path: dist/${{ github.event.inputs.region }}/p1-bundle.pmtiles
+          retention-days: 14
