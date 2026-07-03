@@ -19,6 +19,20 @@ from __future__ import annotations
 import hashlib, json, os, sys, time, urllib.parse, urllib.request
 
 BASE = "https://encdirect.noaa.gov/arcgis/rest/services/encdirect/{service}/MapServer/{layer}/query"
+BASE_META = "https://encdirect.noaa.gov/arcgis/rest/services/encdirect/{service}/MapServer/{layer}"
+
+# Attribute keep-list (pruning pass 2026-07-03): only what the app displays.
+# Layers expose different subsets — each layer's schema is fetched once and the
+# keep-list is INTERSECTED with the real field names (requesting an unknown
+# field is an ArcGIS error). LNAM checked 2026-07-03: NOT exposed by ENC Direct
+# (wreck + buoy schemas verified) — identity dedupe impossible, see BACKLOG.
+KEEP_FIELDS = [
+    "OBJNAM", "SORDAT", "DSNM",                                   # identity/provenance
+    "VALSOU", "CATWRK", "CATOBS", "WATLEV", "QUASOU", "EXPSOU",   # hazards
+    "COLOUR", "COLPAT", "BOYSHP", "BCNSHP", "CATLAM", "CATSPM",   # buoy/beacon symbology
+    "LITCHR", "SIGPER", "SIGGRP", "VALNMR", "HEIGHT",             # light characteristics
+    "CATREA", "RESTRN",                                           # restricted areas
+]
 
 # canonical class -> layer id, per band. Ids DIFFER per band — see enc_layer_map.md.
 FEATURE_SETS: dict[str, dict[str, int]] = {
@@ -59,7 +73,20 @@ BAND_PRIORITY = {"enc_coastal": 0, "enc_approach": 1, "enc_harbour": 2}
 PAGE = 1000  # server maxRecordCount (verified)
 
 
-def fetch_layer(service: str, layer: int, bbox: list[float]) -> list[dict]:
+def layer_out_fields(service: str, layer: int) -> str:
+    """Intersect KEEP_FIELDS with the layer's real schema (one metadata call)."""
+    url = BASE_META.format(service=service, layer=layer) + "?f=json"
+    with urllib.request.urlopen(url, timeout=60) as r:
+        data = json.load(r)
+    have = {f["name"] for f in data.get("fields", [])}
+    keep = [f for f in KEEP_FIELDS if f in have]
+    if not keep:  # schema drifted beyond recognition — fetch everything, loudly
+        print(f"::warning::{service}/{layer}: no keep-field matched schema {sorted(have)} — falling back to *")
+        return "*"
+    return ",".join(keep)
+
+
+def fetch_layer(service: str, layer: int, bbox: list[float], out_fields: str) -> list[dict]:
     feats, offset = [], 0
     while True:
         params = {
@@ -68,7 +95,7 @@ def fetch_layer(service: str, layer: int, bbox: list[float]) -> list[dict]:
             "geometryType": "esriGeometryEnvelope",
             "inSR": 4326, "outSR": 4326,
             "spatialRel": "esriSpatialRelIntersects",
-            "outFields": "*",
+            "outFields": out_fields,
             "resultOffset": offset, "resultRecordCount": PAGE,
             "f": "geojson",
         }
@@ -113,12 +140,17 @@ def main(region_path: str, out_dir: str) -> None:
     for service, layers in FEATURE_SETS.items():
         prio = BAND_PRIORITY[service]
         for cls, layer_id in layers.items():
-            feats = fetch_layer(service, layer_id, bbox)
+            out_fields = layer_out_fields(service, layer_id)
+            feats = fetch_layer(service, layer_id, bbox, out_fields)
             raw_counts.setdefault(cls, {})[service] = len(feats)
             bucket = merged.setdefault(cls, {})
             for f in feats:
-                f.setdefault("properties", {})["bw_cls"] = cls
-                f["properties"]["bw_band"] = service.removeprefix("enc_")
+                # prune null/blank attributes — tippecanoe stores only present keys
+                props = {k: v for k, v in (f.get("properties") or {}).items()
+                         if v is not None and str(v).strip() != ""}
+                props["bw_cls"] = cls
+                props["bw_band"] = service.removeprefix("enc_")
+                f["properties"] = props
                 k = dedupe_key(cls, f)
                 if k not in bucket or prio > bucket[k][0]:
                     bucket[k] = (prio, f)
