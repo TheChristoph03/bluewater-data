@@ -1,0 +1,90 @@
+name: Build charts packs (nav-features + depth cells)
+
+# Offline charts pipeline (P2/P3 of the app repo's docs/OFFLINE_CHARTS_STRATEGY.md):
+# ENC Direct features + BlueTopo depth contours → PMTiles cells + manifest → R2.
+# STATUS: UNTESTED — the first workflow_dispatch run IS spike S3/S4 (real sizes).
+# Cron stays monthly and is safe to leave enabled; upload no-ops until R2 secrets exist.
+# Scaffold + honesty ledger: scripts/charts/README.md
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 3 * *"      # monthly, day 3 06:17 UTC — off the daily proxy crons
+
+permissions:
+  contents: read              # publishes to R2, never writes to the repo
+
+concurrency:
+  group: charts
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install GDAL, build tippecanoe, install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin python3-gdal build-essential libsqlite3-dev zlib1g-dev rclone
+          git clone --depth 1 https://github.com/felt/tippecanoe.git /tmp/tippecanoe
+          make -C /tmp/tippecanoe -j"$(nproc)"
+          sudo make -C /tmp/tippecanoe install
+          gdalinfo --version && tippecanoe --version
+
+      - name: Fetch ENC features (ENC Direct, verified query pattern)
+        run: |
+          python3 scripts/charts/fetch_enc_features.py regions/swfl.json out/enc
+          for f in out/enc/*.geojson; do
+            python3 scripts/charts/decode_s57.py "$f" "${f%.geojson}.dec.geojson"
+            rm "$f"
+          done
+
+      - name: Build nav-features pack
+        run: |
+          mkdir -p dist/swfl
+          bash scripts/charts/build_nav_features.sh swfl out/enc dist/swfl/nav-features.pmtiles
+
+      - name: Fetch BlueTopo + build depth cells (spike S3/S4 measurement)
+        run: |
+          pip install bluetopo
+          python3 scripts/charts/fetch_bluetopo.py regions/swfl.json data/bluetopo
+          python3 scripts/charts/build_depth_cells.py regions/swfl.json data/bluetopo dist/swfl
+
+      - name: Report sizes (paste into OFFLINE_CHARTS_STRATEGY.md §B.4 — replaces EST values)
+        run: |
+          du -h dist/swfl/nav-features.pmtiles
+          du -h dist/swfl/depth/*.pmtiles | sort -h | tail -20
+          du -sh dist/swfl
+
+      - name: Upload to R2 (skips until secrets are configured)
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          if [ -z "$R2_BUCKET" ]; then
+            echo "R2 secrets not configured — dry run, skipping upload."
+            exit 0
+          fi
+          rclone copy dist/swfl "r2:$R2_BUCKET/swfl" --exclude manifest.json --progress
+          # manifest last → readers never see keys that don't exist yet
+          rclone copyto dist/swfl/manifest.json "r2:$R2_BUCKET/swfl/manifest.json"
+
+      - name: Keep artifacts for inspection (7 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: charts-swfl
+          path: |
+            dist/swfl/manifest.json
+            dist/swfl/nav-features.pmtiles
+          retention-days: 7

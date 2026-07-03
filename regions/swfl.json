@@ -1,0 +1,9 @@
+{
+  "region": "swfl",
+  "bbox": [-85.5, 23.5, -80.0, 28.5],
+  "cellGridDegrees": 1.0,
+  "contourIntervalsMeters": { "z7_z10": 20, "z11_z12": 10, "z13_z14": 2 },
+  "maxzoom": 14,
+  "minzoom": 7,
+  "notes": "Padded SWFL region (Cape Coral → Keys, shelf edge + margin). Scan bbox proper is -84.5,24.6,-81.7,27.9. In-range depth of interest ≤ ~130 m (shelf edge; escarpment out of boat range per docs/BACKLOG.md Engine FINDING)."
+}

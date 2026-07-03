@@ -190,3 +190,11 @@ be ≤ **2 days** old (latency makes yesterday normal). Cron staggered to **10:3
   `~/.copernicusmarine` login or the two env vars set.
 
 Costs $0 — the repo is public, so Actions minutes are free.
+
+## Offline charts pipeline (nav-features + depth cells)
+
+Separate from the daily JSON feeds above: a monthly `charts.yml` workflow builds
+offline chart packs (ENC nav features + BlueTopo depth contours as PMTiles) and
+publishes them to Cloudflare R2 — not to this repo. See `scripts/charts/README.md`
+for the honesty ledger (what's verified vs untested), region/cell scheme, and the
+`manifest.json` contract. Region definitions live in `regions/`.
