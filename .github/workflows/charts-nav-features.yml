@@ -1,0 +1,80 @@
+name: Build nav-features pack
+
+# ENC Direct nav-features pack (strategy doc §A.1/§B.2, spike S5): coastal +
+# approach + harbour bands, deduped, one PMTiles per region → workflow artifact.
+# dispatch-only, NO cron (P2/P3 cadence decisions are gated — Chris reviews).
+# R2 upload deliberately absent: Chris stages the pack into the app manually.
+# Layer ids verified live 2026-07-03 — scripts/charts/enc_layer_map.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Region file stem in regions/"
+        default: "swfl"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: charts-nav
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # No GDAL needed here — ENC Direct serves decoded GeoJSON; only tippecanoe.
+      - name: Build tippecanoe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsqlite3-dev zlib1g-dev
+          git clone --depth 1 https://github.com/felt/tippecanoe.git /tmp/tippecanoe
+          make -C /tmp/tippecanoe -j"$(nproc)"
+          sudo make -C /tmp/tippecanoe install
+          tippecanoe --version
+
+      - name: Fetch ENC features (3 bands, paginated, deduped)
+        run: |
+          REGION="${{ github.event.inputs.region }}"
+          python3 scripts/charts/fetch_enc_features.py "regions/$REGION.json" out/enc \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Decode S-57 coded attributes
+        run: |
+          for f in out/enc/nav__*.geojson; do
+            python3 scripts/charts/decode_s57.py "$f" "${f%.geojson}.dec.geojson"
+            rm "$f"
+          done
+
+      - name: Build nav-features PMTiles
+        run: |
+          REGION="${{ github.event.inputs.region }}"
+          mkdir -p "dist/$REGION"
+          bash scripts/charts/build_nav_features.sh "$REGION" out/enc "dist/$REGION/nav-features.pmtiles" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Report pack size
+        run: |
+          REGION="${{ github.event.inputs.region }}"
+          {
+            echo "## nav-features pack — region $REGION"
+            ls -l "dist/$REGION/nav-features.pmtiles"
+            du -h "dist/$REGION/nav-features.pmtiles"
+            echo '```json'
+            cat out/enc/counts.json
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep pack as artifact (14 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nav-features-${{ github.event.inputs.region }}
+          path: |
+            dist/${{ github.event.inputs.region }}/nav-features.pmtiles
+            out/enc/counts.json
+          retention-days: 14
