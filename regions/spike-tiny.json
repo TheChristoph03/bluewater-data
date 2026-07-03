@@ -1,0 +1,9 @@
+{
+  "region": "spike-tiny",
+  "bbox": [-81.9, 25.9, -81.7, 26.1],
+  "cellGridDegrees": 1.0,
+  "contourIntervalsMeters": { "z7_z10": 20, "z11_z12": 10, "z13_z14": 2 },
+  "maxzoom": 14,
+  "minzoom": 7,
+  "notes": "Toolchain spike region ONLY (0.2 deg box off Naples FL, inside swfl). Small enough that a full end-to-end Actions run finishes fast; never uploaded to R2 (workflow guards on region name)."
+}

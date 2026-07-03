@@ -22,10 +22,14 @@ def sh(*cmd: str) -> None:
 
 
 def cells(region: dict):
+    """Integer-degree-ALIGNED grid (README contract; cell ids are integer-degree names).
+    Spike 2026-07-03: previous version stepped from the raw bbox west edge (-85.5),
+    producing half-degree cells whose ids lied about their extent."""
+    from math import ceil, floor
     w, s, e, n = region["bbox"]; step = region["cellGridDegrees"]
-    lat = s
+    lat = floor(s / step) * step
     while lat < n:
-        lon = w
+        lon = floor(w / step) * step
         while lon < e:
             yield (lon, lat, lon + step, lat + step)
             lon += step

@@ -7,16 +7,19 @@ IN_DIR="$2"          # dir of decoded *.geojson
 OUT="$3"             # e.g. dist/swfl/nav-features.pmtiles
 
 # One tippecanoe layer per feature class (file stem after service prefix).
+# ".dec" suffix stripped — spike 2026-07-03 caught layers named "wreck_point.dec".
 args=()
 for f in "$IN_DIR"/*.geojson; do
   stem="$(basename "$f" .geojson)"
   layer="${stem#*__}"
+  layer="${layer%.dec}"
   args+=( -L "$layer:$f" )
 done
 
+# --no-tile-size-limit-message is NOT a tippecanoe flag (spike 2026-07-03: binary rejects it).
 tippecanoe -o "$OUT" --force \
   --minimum-zoom=6 --maximum-zoom=14 \
-  --no-tile-size-limit-message --drop-densest-as-needed \
+  --drop-densest-as-needed \
   --generate-ids --read-parallel \
   --name "bluewater-nav-features-$REGION" \
   --attribution "NOAA ENC via ENC Direct (CC0). Not for navigation." \

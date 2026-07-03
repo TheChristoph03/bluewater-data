@@ -2,12 +2,20 @@ name: Build charts packs (nav-features + depth cells)
 
 # Offline charts pipeline (P2/P3 of the app repo's docs/OFFLINE_CHARTS_STRATEGY.md):
 # ENC Direct features + BlueTopo depth contours → PMTiles cells + manifest → R2.
-# STATUS: UNTESTED — the first workflow_dispatch run IS spike S3/S4 (real sizes).
+# STATUS: composition UNTESTED in CI — first workflow_dispatch run IS spike S3/S4 (real sizes).
+#   Run the spike on the tiny region first: dispatch with region=spike-tiny.
+#   Local spike 2026-07-03 verified: tippecanoe→pmtiles leg, decode_s57, nav-features build,
+#   bluetopo v0.7.0 API surface. NOT locally verifiable: GDAL steps, NOAA network (sandbox limits).
 # Cron stays monthly and is safe to leave enabled; upload no-ops until R2 secrets exist.
 # Scaffold + honesty ledger: scripts/charts/README.md
 
 on:
   workflow_dispatch:
+    inputs:
+      region:
+        description: "Region file stem in regions/ (use spike-tiny for the toolchain spike)"
+        default: "swfl"
+        required: true
   schedule:
     - cron: "17 6 3 * *"      # monthly, day 3 06:17 UTC — off the daily proxy crons
 
@@ -18,6 +26,9 @@ concurrency:
   group: charts
   cancel-in-progress: false
 
+env:
+  REGION: ${{ github.event.inputs.region || 'swfl' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,10 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
+      # NO actions/setup-python here — deliberately. bluetopo imports osgeo.gdal, which
+      # only exists in the SYSTEM interpreter via apt python3-gdal; a hostedtoolcache
+      # python can't see apt dist-packages (spike finding 2026-07-03).
       - name: Install GDAL, build tippecanoe, install rclone
         run: |
           sudo apt-get update
@@ -37,10 +47,11 @@ jobs:
           make -C /tmp/tippecanoe -j"$(nproc)"
           sudo make -C /tmp/tippecanoe install
           gdalinfo --version && tippecanoe --version
+          python3 -c "from osgeo import gdal; print('python-gdal', gdal.__version__)"
 
       - name: Fetch ENC features (ENC Direct, verified query pattern)
         run: |
-          python3 scripts/charts/fetch_enc_features.py regions/swfl.json out/enc
+          python3 scripts/charts/fetch_enc_features.py "regions/$REGION.json" out/enc
           for f in out/enc/*.geojson; do
             python3 scripts/charts/decode_s57.py "$f" "${f%.geojson}.dec.geojson"
             rm "$f"
@@ -48,20 +59,23 @@ jobs:
 
       - name: Build nav-features pack
         run: |
-          mkdir -p dist/swfl
-          bash scripts/charts/build_nav_features.sh swfl out/enc dist/swfl/nav-features.pmtiles
+          mkdir -p "dist/$REGION"
+          bash scripts/charts/build_nav_features.sh "$REGION" out/enc "dist/$REGION/nav-features.pmtiles"
 
       - name: Fetch BlueTopo + build depth cells (spike S3/S4 measurement)
         run: |
-          pip install bluetopo
-          python3 scripts/charts/fetch_bluetopo.py regions/swfl.json data/bluetopo
-          python3 scripts/charts/build_depth_cells.py regions/swfl.json data/bluetopo dist/swfl
+          pip install --break-system-packages bluetopo
+          python3 scripts/charts/fetch_bluetopo.py "regions/$REGION.json" data/bluetopo
+          python3 scripts/charts/build_depth_cells.py "regions/$REGION.json" data/bluetopo "dist/$REGION"
 
       - name: Report sizes (paste into OFFLINE_CHARTS_STRATEGY.md §B.4 — replaces EST values)
         run: |
-          du -h dist/swfl/nav-features.pmtiles
-          du -h dist/swfl/depth/*.pmtiles | sort -h | tail -20
-          du -sh dist/swfl
+          {
+            echo "## charts sizes — region $REGION"
+            du -h "dist/$REGION/nav-features.pmtiles"
+            du -h dist/$REGION/depth/*.pmtiles | sort -h | tail -20
+            du -sh "dist/$REGION"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload to R2 (skips until secrets are configured)
         env:
@@ -76,15 +90,19 @@ jobs:
             echo "R2 secrets not configured — dry run, skipping upload."
             exit 0
           fi
-          rclone copy dist/swfl "r2:$R2_BUCKET/swfl" --exclude manifest.json --progress
+          if [ "$REGION" != "swfl" ]; then
+            echo "Spike/test region ($REGION) — never uploaded to R2."
+            exit 0
+          fi
+          rclone copy "dist/$REGION" "r2:$R2_BUCKET/$REGION" --exclude manifest.json --progress
           # manifest last → readers never see keys that don't exist yet
-          rclone copyto dist/swfl/manifest.json "r2:$R2_BUCKET/swfl/manifest.json"
+          rclone copyto "dist/$REGION/manifest.json" "r2:$R2_BUCKET/$REGION/manifest.json"
 
       - name: Keep artifacts for inspection (7 days)
         uses: actions/upload-artifact@v4
         with:
-          name: charts-swfl
+          name: charts-${{ env.REGION }}
           path: |
-            dist/swfl/manifest.json
-            dist/swfl/nav-features.pmtiles
+            dist/${{ env.REGION }}/manifest.json
+            dist/${{ env.REGION }}/nav-features.pmtiles
           retention-days: 7
