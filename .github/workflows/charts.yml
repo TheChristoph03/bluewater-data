@@ -6,7 +6,8 @@ name: Build charts packs (nav-features + depth cells)
 #   Run the spike on the tiny region first: dispatch with region=spike-tiny.
 #   Local spike 2026-07-03 verified: tippecanoe→pmtiles leg, decode_s57, nav-features build,
 #   bluetopo v0.7.0 API surface. NOT locally verifiable: GDAL steps, NOAA network (sandbox limits).
-# Cron stays monthly and is safe to leave enabled; upload no-ops until R2 secrets exist.
+# Cron DISABLED until the spike-tiny dispatch is green (P2 is gated, strategy doc §G).
+# Re-enable by uncommenting the schedule block below once the pipeline is verified.
 # Scaffold + honesty ledger: scripts/charts/README.md
 
 on:
@@ -16,8 +17,8 @@ on:
         description: "Region file stem in regions/ (use spike-tiny for the toolchain spike)"
         default: "swfl"
         required: true
-  schedule:
-    - cron: "17 6 3 * *"      # monthly, day 3 06:17 UTC — off the daily proxy crons
+  # schedule:
+  #   - cron: "17 6 3 * *"    # monthly, day 3 06:17 UTC — off the daily proxy crons
 
 permissions:
   contents: read              # publishes to R2, never writes to the repo
