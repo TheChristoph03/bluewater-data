@@ -4,7 +4,9 @@ name: Build P1 never-blank bundle (one-off)
 # single p1-bundle.pmtiles, target ≤ 60 MB. ONE-OFF (GEBCO is annual): no cron,
 # workflow_dispatch only. Re-run when GEBCO releases (yearly, ~July) or for a
 # basemap refresh. First run IS spike S3 for the bundle — it measures the real size.
-# STATUS: UNVERIFIED end-to-end (see scripts/charts/README.md honesty ledger).
+# STATUS: run #1 (2026-07-03) reached real data, failed on: 59 MB unfiltered basemap
+# + dead BODC GEBCO URL. Both fixed: basemap now layer-filtered marine-slim in the
+# final tile-join; GEBCO fetched from CEDA (verified gebco.net 2026-07-03).
 
 on:
   workflow_dispatch:
@@ -14,9 +16,17 @@ on:
         default: "swfl"
         required: true
       gebco_url:
-        description: "GEBCO global netCDF zip URL (bump when the annual grid changes)"
-        default: "https://www.bodc.ac.uk/data/open_download/gebco/gebco_2025/zip/"
+        description: "GEBCO global netCDF zip URL (CEDA hosts it since 2025; bump for the annual grid)"
+        default: "https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2025/ice_surface_elevation/netcdf/gebco_2025.zip?download=1"
         required: true
+      base_maxzoom:
+        description: "Basemap max zoom (drop to 11 if the bundle busts 60 MB)"
+        default: "12"
+        required: false
+      base_keep_layers:
+        description: "Comma list of Protomaps basemap layers to keep (marine-slim default)"
+        default: "earth,water,places,pois,boundaries"
+        required: false
 
 permissions:
   contents: read
@@ -51,6 +61,8 @@ jobs:
       - name: Build P1 bundle
         env:
           GEBCO_URL: ${{ github.event.inputs.gebco_url }}
+          BASE_MAXZOOM: ${{ github.event.inputs.base_maxzoom }}
+          BASE_KEEP_LAYERS: ${{ github.event.inputs.base_keep_layers }}
         run: |
           REGION="${{ github.event.inputs.region }}"
           bash scripts/charts/build_p1_bundle.sh "regions/$REGION.json" "dist/$REGION/p1-bundle.pmtiles" \

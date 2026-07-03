@@ -7,10 +7,11 @@
 # ONE-OFF build (GEBCO is annual) — dispatched manually via charts-p1-bundle.yml,
 # NOT part of the monthly charts cron.
 #
-# STATUS: UNVERIFIED composition — written 2026-07-03 in a sandbox whose network
-# blocked every data host (Geofabrik/GEBCO/protomaps/NOAA). Tippecanoe/tile-join/
-# pmtiles legs were verified locally with synthetic data; the fetch legs and real
-# sizes are measured by the first Actions run. See README honesty ledger.
+# STATUS after first real run (2026-07-03): extract + fetch legs reached real data.
+# Findings: unfiltered Protomaps extract = 59 MB (blows the whole budget) → basemap
+# is now LAYER-FILTERED (marine app: keep coastline/water/land shape + POI/places,
+# drop roads/buildings/transit/landuse). Old BODC open_download GEBCO URL is DEAD →
+# GEBCO moved distribution to CEDA (verified gebco.net 2026-07-03).
 #
 # Tools required: curl, jq or python3, gdal_translate/gdal_contour/ogr2ogr (gdal-bin),
 # tippecanoe + tile-join (>=2.17, pmtiles-native), pmtiles CLI (go-pmtiles).
@@ -19,7 +20,13 @@ set -euo pipefail
 REGION_FILE="$1"                  # e.g. regions/swfl.json
 OUT="$2"                          # e.g. dist/swfl/p1-bundle.pmtiles
 WORK="${3:-work-p1}"
-GEBCO_URL="${GEBCO_URL:-https://www.bodc.ac.uk/data/open_download/gebco/gebco_2025/zip/}"
+# GEBCO_2025 ice-surface netCDF zip: 4 GB compressed, 7.5 GB unpacked (~12 GB scratch).
+GEBCO_URL="${GEBCO_URL:-https://dap.ceda.ac.uk/bodc/gebco/global/gebco_2025/ice_surface_elevation/netcdf/gebco_2025.zip?download=1}"
+BASE_MAXZOOM="${BASE_MAXZOOM:-12}"
+# Marine-slim keep-list (Protomaps basemap layer ids): land shape + water + labels
+# + POIs (marinas etc.) + boundaries. Explicitly dropped: roads, buildings, transit,
+# landuse, landcover — they were ~2/3 of the unfiltered 59 MB.
+KEEP_LAYERS="${BASE_KEEP_LAYERS:-earth,water,places,pois,boundaries}"
 
 mkdir -p "$WORK" "$(dirname "$OUT")"
 read -r W S E N <<<"$(python3 -c "
@@ -34,9 +41,30 @@ BUILD_KEY=$(curl -fsSL https://build.protomaps.com/builds.json \
   | python3 -c "import json,sys; bs=json.load(sys.stdin); print(sorted(b['key'] for b in bs)[-1])" \
   || date -u -d yesterday +%Y%m%d.pmtiles)
 echo "== basemap build: $BUILD_KEY"
+# NOTE: pmtiles extract cannot filter layers — layer slimming happens in the final
+# tile-join. This intermediate file is the FULL basemap (~59 MB for swfl, measured).
 pmtiles extract "https://build.protomaps.com/$BUILD_KEY" "$WORK/base.pmtiles" \
-  --bbox="$BBOX" --maxzoom=12
+  --bbox="$BBOX" --maxzoom="$BASE_MAXZOOM"
 du -h "$WORK/base.pmtiles"
+
+# Guard: Protomaps layer ids drift across basemap versions. Verify the keep-list
+# against what the build actually contains — fail loudly rather than silently
+# shipping a blank map.
+python3 - "$WORK/base.pmtiles" "$KEEP_LAYERS" <<'PY'
+import json, subprocess, sys
+meta = json.loads(subprocess.check_output(["pmtiles", "show", "--metadata", sys.argv[1]]))
+have = {l["id"] for l in meta.get("vector_layers", [])}
+keep = sys.argv[2].split(",")
+missing = [k for k in keep if k not in have]
+print("basemap layers present:", sorted(have))
+print("keep-list:", keep)
+if set(keep).isdisjoint(have):
+    sys.exit(f"FATAL: no keep-layer exists in this build — layer ids changed; set BASE_KEEP_LAYERS from: {sorted(have)}")
+if not {"earth", "water"} <= have:
+    sys.exit("FATAL: 'earth'/'water' missing — refusing to build a blank marine basemap")
+if missing:
+    print(f"::warning::keep-layers not in this build (skipped): {missing}")
+PY
 
 # ---- 2. GEBCO grid, clipped to bbox -----------------------------------------
 if [ ! -f "$WORK/gebco_clip.tif" ]; then
@@ -63,14 +91,19 @@ tippecanoe -q -o "$WORK/contours_minor.pmtiles" --force -l contours_minor \
   -Z9 -z12 --drop-densest-as-needed --simplification=10 \
   --attribution "$ATTR" "$WORK/minor.geojson"
 
-# ---- 4. Single-file bundle ----------------------------------------------------
-tile-join -o "$OUT" --force -pk \
+# ---- 4. Single-file bundle (basemap layer-filtered here) ---------------------
+# tile-join -l keeps ONLY the named layers across all inputs, so the contour
+# layers must be in the keep flags too.
+KEEP_FLAGS=()
+for l in ${KEEP_LAYERS//,/ } contours_major contours_minor; do KEEP_FLAGS+=( -l "$l" ); done
+tile-join -o "$OUT" --force -pk "${KEEP_FLAGS[@]}" \
   "$WORK/base.pmtiles" "$WORK/contours_major.pmtiles" "$WORK/contours_minor.pmtiles"
 
 BYTES=$(stat -c%s "$OUT")
-echo "== P1 bundle: $OUT — $((BYTES / 1000000)) MB (target ≤ 60 MB)"
-echo "   components: base=$(du -h "$WORK/base.pmtiles" | cut -f1) major=$(du -h "$WORK/contours_major.pmtiles" | cut -f1) minor=$(du -h "$WORK/contours_minor.pmtiles" | cut -f1)"
+echo "== P1 bundle: $OUT — $((BYTES / 1000000)) MB (target ≤ 60 MB, basemap goal 20–30 MB)"
+echo "   components: base-unfiltered=$(du -h "$WORK/base.pmtiles" | cut -f1) major=$(du -h "$WORK/contours_major.pmtiles" | cut -f1) minor=$(du -h "$WORK/contours_minor.pmtiles" | cut -f1)"
+echo "   basemap: maxzoom=$BASE_MAXZOOM kept-layers=$KEEP_LAYERS"
 if [ "$BYTES" -gt 60000000 ]; then
-  echo "::warning::P1 bundle exceeds 60 MB target ($((BYTES / 1000000)) MB) — trim maxzoom to 11, drop minor contours, or exclude heavy basemap layers via tile-join -L/-l"
+  echo "::warning::P1 bundle exceeds 60 MB target ($((BYTES / 1000000)) MB) — next knobs: BASE_MAXZOOM=11, drop 'pois' from BASE_KEEP_LAYERS, or drop minor contours"
 fi
 echo "Record the REAL size in OFFLINE_CHARTS_STRATEGY.md §B.4 (spike S3, replaces EST)."
