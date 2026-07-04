@@ -58,6 +58,18 @@ jobs:
           bash scripts/charts/build_nav_features.sh "$REGION" out/enc "dist/$REGION/nav-features.pmtiles" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify mid-zoom density (Redfish Pass, swfl only)
+        run: |
+          REGION="${{ github.event.inputs.region }}"
+          if [ "$REGION" != "swfl" ]; then
+            echo "density check bbox is SWFL-specific — skipping for region $REGION"
+            exit 0
+          fi
+          python3 -m pip install --break-system-packages pmtiles mapbox-vector-tile
+          python3 scripts/charts/verify_density.py "dist/$REGION/nav-features.pmtiles" \
+            --bbox="-82.25,26.50,-82.15,26.60" --zooms 11 12 13 14 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Report pack size
         run: |
           REGION="${{ github.event.inputs.region }}"

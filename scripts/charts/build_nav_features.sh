@@ -16,10 +16,20 @@ for f in "$IN_DIR"/*.geojson; do
   args+=( -L "$layer:$f" )
 done
 
+# Density fix 2026-07-03 (Redfish Pass finding: z11=24/z12=56/z13=102 vs z14=205
+# aids — a ~2.5×/zoom ramp, i.e. tippecanoe's DEFAULT point drop-rate below
+# basezoom, NOT --drop-densest-as-needed, which only fires on oversized tiles):
+#   --base-zoom=10        -> FULL point density z10–z14; default 2.5x thinning
+#                            only at z6–9 overview zooms (nobody inspects marks there)
+#   drop-densest REMOVED  -> no silent mid-zoom thinning path left
+#   --maximum-tile-bytes=2500000 -> guardrail FAILS LOUDLY instead of thinning
+#                            if a tile busts 2.5 MB (default 500 KB would abort
+#                            on dense ICW z10 tiles without any drop flag)
 # --no-tile-size-limit-message is NOT a tippecanoe flag (spike 2026-07-03: binary rejects it).
 tippecanoe -o "$OUT" --force \
   --minimum-zoom=6 --maximum-zoom=14 \
-  --drop-densest-as-needed \
+  --base-zoom=10 \
+  --maximum-tile-bytes=2500000 \
   --generate-ids --read-parallel \
   --name "bluewater-nav-features-$REGION" \
   --attribution "NOAA ENC via ENC Direct (CC0). Not for navigation." \
